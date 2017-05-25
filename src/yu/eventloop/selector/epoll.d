@@ -21,6 +21,8 @@ import std.format;
 import std.socket;
 import std.experimental.logger;
 
+import yu.exception : yuCathException;
+
 /** 系统I/O事件处理类，epoll操作的封装
  */
 struct EpollLoop {
@@ -48,7 +50,6 @@ struct EpollLoop {
 	 */
     bool addEvent(AsyncEvent * event) nothrow {
         if (event.fd == socket_t.init) {
-            collectException(warning("the fd is erro!"));
             event.isActive = false;
             return false;
         }
@@ -64,7 +65,6 @@ struct EpollLoop {
 
     bool modEvent(AsyncEvent * event) nothrow {
         if (event.fd == socket_t.init) {
-            collectException(warning("the fd is erro!"));
             event.isActive = false;
             return false;
         }
@@ -83,13 +83,12 @@ struct EpollLoop {
 	 */
     bool delEvent(AsyncEvent * event) nothrow {
         if (event.fd == socket_t.init) {
-            collectException(warning("the fd is erro!"));
             event.isActive = false;
             return false;
         }
         epoll_event ev;
         if ((epoll_ctl(_efd, EPOLL_CTL_DEL, event.fd,  & ev)) != 0) {
-            collectException(error("EPOLL_CTL_DEL erro! ", event.fd));
+            yuCathException!false(error("EPOLL_CTL_DEL erro! ", event.fd));
             return false;
         }
         event.isActive = false;
@@ -103,36 +102,34 @@ struct EpollLoop {
 	 *    @return 返回当前获取的事件的数量。
 	 */
 
-    void wait(int timeout) {
-        epoll_event event;
-        if (epoll_wait(_efd,  & event, 1, timeout) < 1)
-            return;
-        AsyncEvent * asevent = cast(AsyncEvent * )(event.data.ptr);
+    void wait(int timeout)  nothrow  {
+        epoll_event[64] events;
+        auto len = epoll_wait(_efd, events.ptr, 64, timeout);
+        if(len < 1) return;
+        foreach(i;0..len){
+            AsyncEvent * ev = cast(AsyncEvent * )(events[i].data.ptr);
 
-        if (isErro(event.events)) {
-            asevent.obj.onClose();
-            return;
+            if (isErro(events[i].events)) {
+                ev.obj.onClose();
+                continue;
+            }
+            if (isWrite(events[i].events)) ev.obj.onWrite();
+
+            if (isRead(events[i].events))  ev.obj.onRead();
         }
-
-        if (isWrite(event.events))
-            asevent.obj.onWrite();
-
-        if (isRead(event.events))
-            asevent.obj.onRead();
-        return;
     }
 
     void weakUp() nothrow {
         _event.doWrite();
     }
 
-    protected : pragma(inline, true) bool isErro(uint events) {
+    protected : pragma(inline, true) bool isErro(uint events)  nothrow {
         return (events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) != 0;
     }
-    pragma(inline, true) bool isRead(uint events) {
+    pragma(inline, true) bool isRead(uint events)  nothrow {
         return (events & EPOLLIN) != 0;
     }
-    pragma(inline, true) bool isWrite(uint events) {
+    pragma(inline, true) bool isWrite(uint events)  nothrow  {
         return (events & EPOLLOUT) != 0;
     }
 

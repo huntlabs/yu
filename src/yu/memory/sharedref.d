@@ -6,9 +6,7 @@ import std.experimental.allocator;
 static import std.algorithm;
 static import std.algorithm.mutation;
 import std.traits;
-import std.exception;
-
-import yu.traits;
+import yu.traits : isInheritClass, Pointer;
 
 @property IAllocator sharedRefAllocator() {
     return _sharedRefAllocator;
@@ -28,7 +26,7 @@ struct ISharedRef(Allocator, T) {
 
     enum isShared = is(T == shared);
     alias ValueType = Pointer!T;
-    alias Deleter = void function(ref Alloc, ValueType) nothrow;
+    alias Deleter = void function(ref Alloc, ValueType);
     alias Data = ExternalRefCountData!(Alloc, isShared);
     alias DataWithDeleter = ExternalRefCountDataWithDeleter!(Alloc, ValueType, isShared);
     alias TWeakRef = IWeakRef!(Allocator, T);
@@ -61,15 +59,11 @@ struct ISharedRef(Allocator, T) {
         }
     }
 
-    this(ref TSharedRef sptr) {
-        this._ptr = sptr._ptr;
-        this._dd = sptr._dd;
+    this(this){
         if (_dd) {
             _dd.strongRef();
             _dd.weakRef();
         }
-        static if (!isSaticAlloc)
-            this._alloc = sptr._alloc;
     }
 
     this(ref TWeakRef wptr) {
@@ -143,17 +137,8 @@ struct ISharedRef(Allocator, T) {
         return result;
     }
 
-    void opAssign(ref TSharedRef rhs) {
-        TSharedRef copy = TSharedRef(rhs);
-        swap(copy);
-    }
-
     void opAssign(ref TWeakRef rhs) {
         internalSet(rhs._dd, rhs._alloc, rhs._ptr);
-    }
-
-    void opAssign(TSharedRef rhs) {
-        swap(rhs);
     }
 
     static if (isPointer!ValueType) {
@@ -164,24 +149,24 @@ struct ISharedRef(Allocator, T) {
 
 private:
 
-    static void defaultDeleter(ref Alloc alloc, ValueType value) nothrow {
-        collectException(alloc.dispose(value));
+    static void defaultDeleter(ref Alloc alloc, ValueType value)  {
+        alloc.dispose(value);
     }
 
-    void deref() nothrow {
+    void deref() {
         _ptr = null;
         deref(_dd, _alloc);
     }
 
-    static void deref(ref Data dd, ref Alloc alloc) nothrow {
+    static void deref(ref Data dd, ref Alloc alloc) {
         if (!dd)
             return;
         if (!dd.strongDef()) {
             dd.free(alloc);
         }
         if (!dd.weakDef()) {
-            collectException(sharedRefAllocator.dispose(dd));
-            dd = null;
+            scope(exit) dd = null;
+            sharedRefAllocator.dispose(dd);
         }
     }
 
@@ -244,13 +229,9 @@ struct IWeakRef(Allocator, T) {
             this._alloc = tref._alloc;
     }
 
-    this(ref TWeakRef tref) {
-        this._ptr = tref._ptr;
-        this._dd = tref._dd;
+    this(this){
         if (_dd)
             _dd.weakRef();
-        static if (!isSaticAlloc)
-            this._alloc = tref._alloc;
     }
 
     pragma(inline, true) bool isNull() {
@@ -277,27 +258,17 @@ struct IWeakRef(Allocator, T) {
         return TSharedRef(this);
     }
 
-    void opAssign(ref TWeakRef rhs) {
-        TWeakRef copy = TWeakRef(rhs);
-        swap(copy);
-    }
-
     void opAssign(ref TSharedRef rhs) {
         internalSet(rhs._dd, rhs._alloc, rhs._ptr);
     }
 
-    void opAssign(TWeakRef rhs) {
-        swap(rhs);
-    }
-
 private:
-    void deref() nothrow {
+    void deref() {
         _ptr = null;
-        if (!_dd)
-            return;
+        if (!_dd) return;
         if (!_dd.weakDef()) {
-            collectException(sharedRefAllocator.dispose(_dd));
-            _dd = null;
+            scope(exit) _dd = null;
+            sharedRefAllocator.dispose(_dd);
         }
     }
 
@@ -404,7 +375,7 @@ abstract class ExternalRefCountData(Alloc, bool isShared) {
             return _strongref;
     }
 
-    void free(ref Alloc alloc) nothrow;
+    void free(ref Alloc alloc);
 
     static if (isShared) {
         shared int _weakref = 1;
@@ -418,14 +389,14 @@ abstract class ExternalRefCountData(Alloc, bool isShared) {
 final class ExternalRefCountDataWithDeleter(Alloc, ValueType, bool isShared)
     : ExternalRefCountData!(Alloc, isShared) {
     //pragma(msg, "is  ahsred " ~ isShared.stringof);
-    alias Deleter = void function(ref Alloc, ValueType) nothrow;
+    alias Deleter = void function(ref Alloc, ValueType);
 
     this(ValueType ptr, Deleter dele) {
         value = ptr;
         deleater = dele;
     }
 
-    override void free(ref Alloc alloc) nothrow {
+    override void free(ref Alloc alloc) {
         if (deleater && value)
             deleater(alloc, value);
         deleater = null;
